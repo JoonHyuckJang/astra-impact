@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import requests
@@ -59,18 +60,25 @@ def call_llm(change: dict, tasks: list[dict]) -> dict:
 
 def _call_gemini(user_message: str) -> str:
     model = env("GEMINI_MODEL", "gemini-3.6-flash")
-    r = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        headers={"x-goog-api-key": env("GEMINI_API_KEY"), "content-type": "application/json"},
-        json={
-            "systemInstruction": {"parts": [{"text": SYSTEM}]},
-            "contents": [{"role": "user", "parts": [{"text": user_message}]}],
-            "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 8000},
-        },
-        timeout=120,
-    )
-    if r.status_code == 429:
-        sys.exit("Gemini 무료 한도에 걸렸습니다. 1분쯤 기다렸다가 다시 실행하세요.")
+    # 무료 등급은 서버가 붐비면 503, 한도에 걸리면 429를 돌려준다. 잠깐 쉬었다가 다시 시도한다.
+    for attempt, wait in enumerate([0, 15, 30, 60], start=1):
+        if wait:
+            print(f"Gemini 재시도 {attempt}/4: {wait}초 기다립니다")
+            time.sleep(wait)
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": env("GEMINI_API_KEY"), "content-type": "application/json"},
+            json={
+                "systemInstruction": {"parts": [{"text": SYSTEM}]},
+                "contents": [{"role": "user", "parts": [{"text": user_message}]}],
+                "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 8000},
+            },
+            timeout=180,
+        )
+        if r.status_code not in (429, 500, 503):
+            break
+    if r.status_code in (429, 500, 503):
+        sys.exit(f"Gemini가 계속 응답하지 않습니다(HTTP {r.status_code}). 몇 분 뒤 Re-run jobs를 누르세요.")
     r.raise_for_status()
     parts = r.json()["candidates"][0]["content"]["parts"]
     return "".join(p.get("text", "") for p in parts)
