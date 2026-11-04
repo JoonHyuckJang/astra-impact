@@ -1,0 +1,45 @@
+name: spec-change-impact
+
+on:
+  repository_dispatch:
+    types: [analyze, apply]
+  workflow_dispatch:
+    inputs:
+      cmd:
+        description: analyze 또는 apply
+        required: true
+        default: analyze
+      key:
+        description: 기획 변경 이슈 키
+        required: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run analyzer
+        env:
+          CMD: ${{ github.event.action || inputs.cmd }}
+          KEY: ${{ github.event.client_payload.key || inputs.key }}
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+          JIRA_PROJECT: ${{ vars.JIRA_PROJECT }}
+          TASK_ISSUE_TYPE_ID: ${{ vars.TASK_ISSUE_TYPE_ID }}
+          FIELD_SPEC_ID: ${{ vars.FIELD_SPEC_ID }}
+          FIELD_DISCIPLINE: ${{ vars.FIELD_DISCIPLINE }}
+          FIELD_BEFORE: ${{ vars.FIELD_BEFORE }}
+          FIELD_AFTER: ${{ vars.FIELD_AFTER }}
+          FIELD_CONFIRMED: ${{ vars.FIELD_CONFIRMED }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if ! [[ "$KEY" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then echo "잘못된 이슈 키: $KEY"; exit 1; fi
+          python src/impact_analyzer.py "$CMD" --issue "$KEY"
