@@ -232,6 +232,12 @@ def jira_tasks(j: Jira):
 def cmd_analyze(key):
     j = Jira()
     f = j.issue(key)["fields"]
+    # 이미 PM이 확정했거나 끝난 변경은 다시 분석하지 않는다 (PM 판단을 덮어쓰지 않기 위해)
+    locked = {env("STATUS_APPROVED", "전파 승인"), env("STATUS_DONE", "전파 완료"), env("STATUS_REJECTED", "반려")}
+    if f["status"]["name"] in locked:
+        print(f"{key}: 상태가 '{f['status']['name']}'이라 재분석하지 않습니다.")
+        return
+    existing = re.findall(r"[A-Z][A-Z0-9]+-\d+", f.get(j.f_confirmed) or "")
     change = {
         "title": f["summary"],
         "spec_id": option_value(f.get(j.f_spec)),
@@ -255,13 +261,25 @@ def cmd_analyze(key):
     ]
     if result["new_work"]:
         blocks.append(adf_p("새로 필요해 보이는 작업: " + " / ".join(result["new_work"])))
-    blocks.append(adf_p("'확정 영향 작업' 필드에서 빼거나 더한 뒤 '전파 승인'으로 넘기면 알림이 나갑니다."))
+    new_keys = [i["key"] for i in impacted]
+    if existing:
+        # 재분석: PM이 정리한 목록은 그대로 두고, 차이만 알려 준다
+        added = [k for k in new_keys if k not in existing]
+        dropped = [k for k in existing if k not in new_keys]
+        blocks.append(adf_p("재분석 결과입니다. '확정 영향 작업' 칸은 PM이 정리한 그대로 두었습니다."))
+        blocks.append(adf_p("이번에 새로 나온 후보: " + (", ".join(added) or "없음")))
+        blocks.append(adf_p("확정 목록에는 있지만 이번 분석에는 없는 작업: " + (", ".join(dropped) or "없음")))
+    else:
+        blocks.append(adf_p("'확정 영향 작업' 필드에서 빼거나 더한 뒤 '전파 승인'으로 넘기면 알림이 나갑니다."))
     j.comment(key, adf_doc(*blocks))
 
-    j.set_property(key, {"candidates": impacted, "new_work": result["new_work"]})
-    j.update(key, fields={j.f_confirmed: ", ".join(i["key"] for i in impacted)})
+    prop = j.get_property(key)
+    history = prop.get("history", []) + ([prop["candidates"]] if prop.get("candidates") else [])
+    j.set_property(key, {"candidates": impacted, "new_work": result["new_work"], "history": history})
+    if not existing:
+        j.update(key, fields={j.f_confirmed: ", ".join(new_keys)})
     j.transition(key, env("STATUS_REVIEW", "PM 검토"))
-    print(f"{key}: 후보 {len(impacted)}건 등록")
+    print(f"{key}: 후보 {len(impacted)}건 등록 (기존 확정 목록 {'유지' if existing else '없음'})")
 
 
 def cmd_apply(key):
